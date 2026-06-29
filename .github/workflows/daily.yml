@@ -36,6 +36,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Random delay (0-40 minutes)
+        if: github.event_name == 'schedule'
         run: |
           delay=$((RANDOM % 2400))
           echo "Delaying execution by $delay seconds (around $((delay / 60)) minutes)..."
