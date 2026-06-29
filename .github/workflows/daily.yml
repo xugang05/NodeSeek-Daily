@@ -5,7 +5,7 @@ on:
     branches:
       - main
   schedule:
-    - cron: '00 16 * * *'  # UTC 16:00，即北京时间 00:00
+    - cron: '40 1 * * *'  # UTC 01:40, which is Beijing Time 09:40
   workflow_dispatch:
 
 jobs:
@@ -34,6 +34,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
+      - name: Random delay (0-40 minutes)
+        run: |
+          delay=$((RANDOM % 2400))
+          echo "Delaying execution by $delay seconds (around $((delay / 60)) minutes)..."
+          sleep $delay
 
       - name: Run NodeSeek script
         env:
