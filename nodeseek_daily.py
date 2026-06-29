@@ -88,6 +88,22 @@ def click_sign_icon(driver):
         traceback.print_exc()
         return False
 
+def get_chrome_major_version():
+    """
+    获取系统中安装的 Chrome 或 Chromium 的主版本号
+    """
+    import subprocess
+    import re
+    for cmd in [["google-chrome", "--version"], ["chromium-browser", "--version"], ["google-chrome-stable", "--version"]]:
+        try:
+            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT).decode("utf-8")
+            match = re.search(r"(\d+)\.\d+\.\d+", output)
+            if match:
+                return int(match.group(1))
+        except Exception:
+            continue
+    return None
+
 def setup_driver_and_cookies():
     """
     初始化浏览器并设置cookie的通用方法
@@ -117,7 +133,12 @@ def setup_driver_and_cookies():
             options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
         
         print("正在启动Chrome...")
-        driver = uc.Chrome(options=options)
+        major_version = get_chrome_major_version()
+        if major_version:
+            print(f"检测到 Chrome 主版本号: {major_version}")
+            driver = uc.Chrome(options=options, version_main=major_version)
+        else:
+            driver = uc.Chrome(options=options)
         
         if headless:
             # 执行 JavaScript 来修改 webdriver 标记
