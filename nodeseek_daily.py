@@ -5,6 +5,9 @@ Licensed under the MIT License.
 See LICENSE file in the project root for full license information.
 """
 import os
+import re
+import shutil
+import subprocess
 from bs4 import BeautifulSoup
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -104,21 +107,63 @@ def click_sign_icon(driver):
         traceback.print_exc()
         return False
 
-def get_chrome_major_version():
-    """
-    获取系统中安装的 Chrome 或 Chromium 的主版本号
-    """
-    import subprocess
-    import re
-    for cmd in [["google-chrome", "--version"], ["chromium-browser", "--version"], ["google-chrome-stable", "--version"]]:
-        try:
-            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT).decode("utf-8")
-            match = re.search(r"(\d+)\.\d+\.\d+", output)
-            if match:
-                return int(match.group(1))
-        except Exception:
+def resolve_chrome_binary():
+    """返回同一个 Chrome/Chromium 可执行文件的路径和主版本号。"""
+    for name in ("google-chrome", "chromium-browser", "google-chrome-stable", "chromium"):
+        executable = shutil.which(name)
+        if not executable:
             continue
-    return None
+        executable = os.path.abspath(executable)
+        try:
+            output = subprocess.check_output(
+                [executable, "--version"],
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=10,
+            )
+            match = re.search(
+                r"(?m)^\s*(?:Google Chrome(?: for Testing)?|Chromium)\s+(\d+)\.\d+\.\d+",
+                output,
+            )
+            if match and int(match.group(1)) > 0:
+                return executable, int(match.group(1))
+        except (OSError, subprocess.SubprocessError):
+            continue
+    raise RuntimeError("找不到可用的 Chrome/Chromium，或无法读取浏览器版本号")
+
+
+def create_browser(headless=True):
+    """只启动浏览器，不访问 NodeSeek 或读取、设置 Cookie。"""
+    print("开始初始化浏览器...")
+    executable, major_version = resolve_chrome_binary()
+    options = uc.ChromeOptions()
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+
+    if headless:
+        print("启用无头模式...")
+        options.add_argument('--headless')
+        # 添加以下参数来绕过 Cloudflare 检测
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--window-size=1920,1080')
+        # 设置 User-Agent
+        options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+
+    print(f"正在启动 Chrome: {executable}，主版本号: {major_version}")
+    driver = uc.Chrome(
+        options=options,
+        browser_executable_path=executable,
+        version_main=major_version,
+    )
+
+    if headless:
+        # 执行 JavaScript 来修改 webdriver 标记
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        driver.set_window_size(1920, 1080)
+
+    print("Chrome启动成功")
+    return driver
 
 def setup_driver_and_cookies():
     """
@@ -133,35 +178,7 @@ def setup_driver_and_cookies():
             print("未找到cookie配置")
             return None
             
-        print("开始初始化浏览器...")
-        options = uc.ChromeOptions()
-        options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
-        
-        if headless:
-            print("启用无头模式...")
-            options.add_argument('--headless')
-            # 添加以下参数来绕过 Cloudflare 检测
-            options.add_argument('--disable-blink-features=AutomationControlled')
-            options.add_argument('--disable-gpu')
-            options.add_argument('--window-size=1920,1080')
-            # 设置 User-Agent
-            options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-        
-        print("正在启动Chrome...")
-        major_version = get_chrome_major_version()
-        if major_version:
-            print(f"检测到 Chrome 主版本号: {major_version}")
-            driver = uc.Chrome(options=options, version_main=major_version)
-        else:
-            driver = uc.Chrome(options=options)
-        
-        if headless:
-            # 执行 JavaScript 来修改 webdriver 标记
-            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            driver.set_window_size(1920, 1080)
-        
-        print("Chrome启动成功")
+        driver = create_browser(headless=headless)
         
         print("正在设置cookie...")
         driver.get('https://www.nodeseek.com')
@@ -334,4 +351,3 @@ if __name__ == "__main__":
     print("脚本执行完成")
     # while True:
     #     time.sleep(1)
-
