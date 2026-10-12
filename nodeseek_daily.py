@@ -8,8 +8,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
-from urllib.parse import urlsplit
 from bs4 import BeautifulSoup
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -29,133 +27,85 @@ headless = os.environ.get("HEADLESS", "true").lower() == "true"
 
 randomInputStr = ["bd","绑定","帮顶"]
 
-NODESEEK_ORIGIN = "https://www.nodeseek.com"
-ALREADY_CHECKED_IN = "今天已完成签到，请勿重复操作"
-
-
-class CheckinError(RuntimeError):
-    """An actionable, safe-to-log failure (never contains cookies/page content)."""
-
-
-def check_origin(driver):
-    """Cookies may only be restored to the intended HTTPS origin."""
-    location = urlsplit(driver.current_url)
-    if (location.scheme, location.netloc) != ("https", "www.nodeseek.com"):
-        raise CheckinError("unexpected_origin: 页面不在 NodeSeek，请检查访问状态")
-    return location
-
-
-def inspect_page(driver, allow_login=False):
-    """Do not submit requests from a redirect, login page or security challenge."""
-    location = check_origin(driver)
-    title = driver.title.lower()
-    if any(marker in title for marker in ("just a moment", "attention required", "security verification")):
-        raise CheckinError("challenge: NodeSeek 要求人机验证，未执行签到")
-    if driver.find_elements(By.CSS_SELECTOR, "#challenge-form, #challenge-running, iframe[src*='challenges.cloudflare.com']"):
-        raise CheckinError("challenge: NodeSeek 要求人机验证，未执行签到")
-    if not allow_login and location.path.rstrip("/") in ("/signIn", "/signin", "/login"):
-        raise CheckinError("unauthenticated: 页面跳转到登录页，请更新 NS_COOKIE")
-
-
-def check_page(driver, allow_login=False):
-    """Allow one passive settle period for a transient challenge, never solve it."""
-    try:
-        inspect_page(driver, allow_login=allow_login)
-    except CheckinError as error:
-        if not str(error).startswith("challenge:") or getattr(driver, "_ns_challenge_wait_used", False) is True:
-            raise
-        driver._ns_challenge_wait_used = True
-        print("检测到验证页面，静候 8 秒后仅复查一次；不操作验证码")
-        time.sleep(8)
-        inspect_page(driver, allow_login=allow_login)
-
-
-# Use the site's same-origin attendance endpoint in the existing browser session.
-# No raw Cookie header, token, response body or account details are written to logs.
-ATTENDANCE_SCRIPT = r"""
-const randomReward = arguments[0];
-const done = arguments[arguments.length - 1];
-const controller = new AbortController();
-const timer = setTimeout(() => controller.abort(), 20000);
-(async () => {
-    try {
-        const response = await fetch('/api/attendance?random=' + randomReward, {
-            method: 'POST',
-            credentials: 'same-origin',
-            redirect: 'error',
-            headers: {'Accept': 'application/json', 'Content-Type': 'application/json'},
-            body: JSON.stringify({random: randomReward === 'true'}),
-            signal: controller.signal
-        });
-        const raw = await response.text();
-        let data = null;
-        try { data = JSON.parse(raw); } catch (_) {}
-        done({status: response.status, data,
-              challenge: /just a moment|cf-chl-|challenge-platform|verify you are human/i.test(raw)});
-    } catch (error) {
-        done({error: error.name === 'AbortError' ? 'timeout' : 'network_or_redirect'});
-    } finally {
-        clearTimeout(timer);
-    }
-})();
-"""
-
-
-def interpret_attendance(response):
-    """Only an explicit server confirmation counts as a completed check-in."""
-    if not isinstance(response, dict):
-        raise CheckinError("invalid_response: 签到接口没有返回有效结果")
-    if response.get("error"):
-        raise CheckinError("request_failed: 签到请求超时、网络错误或重定向，结果未确认")
-    if response.get("challenge") is True:
-        raise CheckinError("challenge: 签到接口要求人机验证，结果未确认")
-    status = response.get("status")
-    if status == 401:
-        raise CheckinError("unauthenticated: 登录已失效，请更新 NS_COOKIE")
-    if type(status) is not int or not 200 <= status < 300:
-        safe_status = status if type(status) is int else "unknown"
-        raise CheckinError(f"http_error: 签到接口 HTTP {safe_status}，结果未确认")
-    data = response.get("data")
-    if not isinstance(data, dict):
-        raise CheckinError("invalid_response: 签到接口返回非 JSON 对象，结果未确认")
-    message = data.get("message")
-    if isinstance(message, str) and any(word in message for word in ("未登录", "请先登录", "登录过期", "登录失效", "用户不存在")):
-        raise CheckinError("unauthenticated: 服务端未识别登录状态，请检查 NS_COOKIE")
-    if data.get("success") is True:
-        return "success"
-    # Exact server response, not a substring found in page text or arbitrary errors.
-    if isinstance(message, str) and message.strip().rstrip("。！!") == ALREADY_CHECKED_IN:
-        return "already_checked_in"
-    raise CheckinError("rejected: 服务端未确认签到成功或今日已签到，请检查登录状态及站点限制")
-
-
 def click_sign_icon(driver):
-    """Compatibility entry point: submit and verify attendance, without brittle UI text."""
+    """
+    尝试点击签到图标和试试手气按钮的通用方法
+    """
     try:
-        print("访问 NodeSeek 签到页面...")
-        driver.get(NODESEEK_ORIGIN + "/board")
-        check_page(driver)
-        random_reward = os.environ.get("NS_RANDOM", "false").lower() == "true"
-        print(f"签到奖励模式: {'随机' if random_reward else '固定'}")
-        driver.set_script_timeout(25)
-        response = driver.execute_async_script(ATTENDANCE_SCRIPT, str(random_reward).lower())
-        result = interpret_attendance(response)
-        if result == "success":
-            print("签到成功：服务端已确认 (checkin_status=success)")
-            gain = response["data"].get("gain")
-            if type(gain) is int:
-                print(f"本次获得鸡腿: {gain}")
-        else:
-            print("今日已签到：服务端已确认 (checkin_status=already_checked_in)")
+        print("直接导航到签到页面 (https://www.nodeseek.com/board)...")
+        driver.get("https://www.nodeseek.com/board")
+        time.sleep(5)
+        
+        # 打印当前URL
+        print(f"当前页面URL: {driver.current_url}")
+        
+        # 如果直接导航失败或者没跳转成功，尝试点击签到图标
+        if "/board" not in driver.current_url:
+            print("直接导航未成功跳转到 /board，尝试查找并点击签到图标...")
+            try:
+                try:
+                    sign_element = WebDriverWait(driver, 15).until(
+                        EC.presence_of_element_located((By.XPATH, "//a[span[@title='签到']]"))
+                    )
+                    print("找到包含签到图标的a标签链接")
+                except Exception:
+                    sign_element = WebDriverWait(driver, 15).until(
+                        EC.presence_of_element_located((By.XPATH, "//span[@title='签到']"))
+                    )
+                    print("未找到a标签链接，已定位到签到span元素")
+                
+                # 使用 scrollIntoView({block: 'center'}) 避免被顶部固定导航栏遮挡
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", sign_element)
+                time.sleep(0.5)
+                print(f"签到元素 HTML: {sign_element.get_attribute('outerHTML')}")
+                
+                try:
+                    sign_element.click()
+                    print("签到元素点击成功")
+                except Exception as click_error:
+                    print(f"标准点击失败，尝试使用 JavaScript 点击: {str(click_error)}")
+                    driver.execute_script("arguments[0].click();", sign_element)
+                
+                print("等待页面跳转...")
+                time.sleep(5)
+                print(f"当前页面URL: {driver.current_url}")
+            except Exception as e:
+                print(f"寻找或点击签到图标时出错: {str(e)}")
+        
+        # 点击"试试手气"按钮
+        try:
+            click_button = None
+            print(f"是否选择随机奖励 (NS_RANDOM): {ns_random}")
+            if ns_random:
+                print("准备寻找 '试试手气' 按钮...")
+                click_button = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), '试试手气')]"))
+                )
+            else:
+                print("准备寻找 '鸡腿 x 5' 按钮...")
+                click_button = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), '鸡腿 x 5')]"))
+                )
+            
+            # 滚动到中心并点击
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", click_button)
+            time.sleep(0.5)
+            click_button.click()
+            print("已成功点击签到抽奖按钮")
+        except Exception as lucky_error:
+            print(f"试试手气按钮点击失败或者签到过了: {str(lucky_error)}")
+            
         return True
-    except CheckinError as error:
-        print(f"签到失败 (checkin_status=failed): {error}")
+        
+    except Exception as e:
+        print(f"签到过程中出错:")
+        print(f"错误类型: {type(e).__name__}")
+        print(f"错误信息: {str(e)}")
+        print(f"当前页面URL: {driver.current_url}")
+        print(f"当前页面源码片段: {driver.page_source[:500]}...")
+        print("详细错误信息:")
+        traceback.print_exc()
         return False
-    except Exception as error:
-        # Selenium errors may include page content or session details; log type only.
-        print(f"签到失败 (checkin_status=failed): browser_error/{type(error).__name__}，结果未确认")
-        return False
-
 
 def resolve_chrome_binary():
     """返回同一个 Chrome/Chromium 可执行文件的路径和主版本号。"""
@@ -193,8 +143,12 @@ def create_browser(headless=True):
     if headless:
         print("启用无头模式...")
         options.add_argument('--headless')
+        # 添加以下参数来绕过 Cloudflare 检测
+        options.add_argument('--disable-blink-features=AutomationControlled')
         options.add_argument('--disable-gpu')
         options.add_argument('--window-size=1920,1080')
+        # 设置 User-Agent
+        options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
     print(f"正在启动 Chrome: {executable}，主版本号: {major_version}")
     driver = uc.Chrome(
@@ -204,51 +158,58 @@ def create_browser(headless=True):
     )
 
     if headless:
+        # 执行 JavaScript 来修改 webdriver 标记
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         driver.set_window_size(1920, 1080)
 
     print("Chrome启动成功")
     return driver
 
 def setup_driver_and_cookies():
-    """Initialize the browser; fail closed if any configured cookie cannot be set."""
-    driver = None
+    """
+    初始化浏览器并设置cookie的通用方法
+    返回: 设置好cookie的driver实例
+    """
     try:
-        raw_cookie = os.environ.get("NS_COOKIE") or os.environ.get("COOKIE")
-        if not raw_cookie or not raw_cookie.strip():
-            raise CheckinError("missing_cookie: 未找到 NS_COOKIE 配置")
-        cookies = []
-        for part in raw_cookie.split(";"):
-            if not part.strip():
-                continue
-            name, separator, value = part.strip().partition("=")
-            if not separator or not name:
-                raise CheckinError("invalid_cookie: Cookie 格式无效，请使用请求中的 Cookie 值")
-            cookies.append({"name": name, "value": value, "domain": ".nodeseek.com", "path": "/"})
-        if not cookies:
-            raise CheckinError("invalid_cookie: 没有有效 Cookie")
-        driver = create_browser(headless=os.environ.get("HEADLESS", "true").lower() == "true")
-        driver.set_page_load_timeout(45)
-        driver.get(NODESEEK_ORIGIN)
-        # The first visit has no configured session yet. Restore existing cookies
-        # before assessing authentication/challenges, but never on another origin.
-        check_origin(driver)
-        for item in cookies:
-            driver.add_cookie(item)
-        driver.get(NODESEEK_ORIGIN)
-        check_page(driver)
-        return driver
-    except Exception as error:
-        if isinstance(error, CheckinError):
-            print(f"初始化失败: {error}")
-        else:
-            print(f"初始化失败: browser_or_cookie_error/{type(error).__name__}")
-        if driver is not None:
+        cookie = os.environ.get("NS_COOKIE") or os.environ.get("COOKIE")
+        headless = os.environ.get("HEADLESS", "true").lower() == "true"
+        
+        if not cookie:
+            print("未找到cookie配置")
+            return None
+            
+        driver = create_browser(headless=headless)
+        
+        print("正在设置cookie...")
+        driver.get('https://www.nodeseek.com')
+        
+        # 等待页面加载完成
+        time.sleep(5)
+        
+        for cookie_item in cookie.split(';'):
             try:
-                driver.quit()
-            except Exception:
-                pass
+                name, value = cookie_item.strip().split('=', 1)
+                driver.add_cookie({
+                    'name': name, 
+                    'value': value, 
+                    'domain': '.nodeseek.com',
+                    'path': '/'
+                })
+            except Exception as e:
+                print(f"设置cookie出错: {str(e)}")
+                continue
+        
+        print("刷新页面...")
+        driver.refresh()
+        time.sleep(5)  # 增加等待时间
+        
+        return driver
+        
+    except Exception as e:
+        print(f"设置浏览器和Cookie时出错: {str(e)}")
+        print("详细错误信息:")
+        print(traceback.format_exc())
         return None
-
 
 def nodeseek_comment(driver):
     try:
@@ -379,19 +340,14 @@ def click_chicken_leg(driver):
         print(f"加鸡腿操作失败: {str(e)}")
         return False
 
-def main():
-    print("开始执行 NodeSeek 签到...")
-    driver = setup_driver_and_cookies()
-    if driver is None:
-        return 1
-    try:
-        return 0 if click_sign_icon(driver) else 1
-    finally:
-        try:
-            driver.quit()
-        except Exception:
-            print("浏览器清理失败；不影响已确认的签到结果")
-
-
 if __name__ == "__main__":
-    sys.exit(main())
+    print("开始执行NodeSeek评论脚本...")
+    driver = setup_driver_and_cookies()
+    if not driver:
+        print("浏览器初始化失败")
+        exit(1)
+    # nodeseek_comment(driver)
+    click_sign_icon(driver)
+    print("脚本执行完成")
+    # while True:
+    #     time.sleep(1)
