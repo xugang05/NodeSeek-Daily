@@ -163,6 +163,42 @@ class CookieAndExitTests(unittest.TestCase):
         driver.add_cookie.assert_called_once()
         driver.quit.assert_not_called()
 
+    @patch.object(daily.time, "sleep")
+    @patch.object(daily, "create_browser")
+    def test_guest_challenge_does_not_prevent_restoring_session(self, create, sleep):
+        driver = create.return_value = browser()
+        def navigate(url):
+            driver.current_url = "https://www.nodeseek.com/"
+            driver.title = "Just a moment..." if driver.get.call_count == 1 else "NodeSeek"
+            if driver.get.call_count == 2:
+                driver.add_cookie.assert_called_once()
+        driver.get.side_effect = navigate
+        with patch.dict(os.environ, {"NS_COOKIE": "session=test-only"}, clear=True):
+            self.assertIs(daily.setup_driver_and_cookies(), driver)
+        sleep.assert_not_called()
+        driver.quit.assert_not_called()
+
+    @patch.object(daily.time, "sleep")
+    @patch.object(daily, "create_browser")
+    def test_persistent_challenge_still_fails_after_cookie_restoration(self, create, sleep):
+        driver = create.return_value = browser()
+        driver.title = "Just a moment..."
+        with patch.dict(os.environ, {"NS_COOKIE": "session=test-only"}, clear=True):
+            self.assertIsNone(daily.setup_driver_and_cookies())
+        driver.add_cookie.assert_called_once()
+        sleep.assert_called_once_with(8)
+        driver.quit.assert_called_once()
+        driver.execute_async_script.assert_not_called()
+
+    @patch.object(daily, "create_browser")
+    def test_foreign_origin_never_receives_cookies(self, create):
+        driver = create.return_value = browser()
+        driver.current_url = "https://example.com/"
+        with patch.dict(os.environ, {"NS_COOKIE": "session=test-only"}, clear=True):
+            self.assertIsNone(daily.setup_driver_and_cookies())
+        driver.add_cookie.assert_not_called()
+        driver.quit.assert_called_once()
+
     @patch.object(daily, "create_browser")
     def test_cookie_failure_closes_browser_without_leaking(self, create):
         create.return_value = browser()

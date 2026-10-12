@@ -37,11 +37,17 @@ class CheckinError(RuntimeError):
     """An actionable, safe-to-log failure (never contains cookies/page content)."""
 
 
-def inspect_page(driver, allow_login=False):
-    """Do not submit requests from a redirect, login page or security challenge."""
+def check_origin(driver):
+    """Cookies may only be restored to the intended HTTPS origin."""
     location = urlsplit(driver.current_url)
     if (location.scheme, location.netloc) != ("https", "www.nodeseek.com"):
         raise CheckinError("unexpected_origin: 页面不在 NodeSeek，请检查访问状态")
+    return location
+
+
+def inspect_page(driver, allow_login=False):
+    """Do not submit requests from a redirect, login page or security challenge."""
+    location = check_origin(driver)
     title = driver.title.lower()
     if any(marker in title for marker in ("just a moment", "attention required", "security verification")):
         raise CheckinError("challenge: NodeSeek 要求人机验证，未执行签到")
@@ -223,7 +229,9 @@ def setup_driver_and_cookies():
         driver = create_browser(headless=os.environ.get("HEADLESS", "true").lower() == "true")
         driver.set_page_load_timeout(45)
         driver.get(NODESEEK_ORIGIN)
-        check_page(driver, allow_login=True)
+        # The first visit has no configured session yet. Restore existing cookies
+        # before assessing authentication/challenges, but never on another origin.
+        check_origin(driver)
         for item in cookies:
             driver.add_cookie(item)
         driver.get(NODESEEK_ORIGIN)
