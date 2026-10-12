@@ -133,15 +133,18 @@ class BrowserStartupTests(unittest.TestCase):
     @patch.object(daily.time, "sleep")
     @patch.object(daily, "create_browser")
     def test_cookie_setup_uses_startup_helper(self, create, sleep):
+        create.return_value.current_url = "https://www.nodeseek.com/"
+        create.return_value.title = "NodeSeek"
+        create.return_value.find_elements.return_value = []
         with patch.dict(os.environ, {"NS_COOKIE": "test=fake", "HEADLESS": "false"}, clear=True):
             driver = daily.setup_driver_and_cookies()
         create.assert_called_once_with(headless=False)
         self.assertIs(driver, create.return_value)
-        self.assertEqual(driver.get.call_args_list, [call("https://www.nodeseek.com")])
+        self.assertEqual(driver.get.call_args_list, [call("https://www.nodeseek.com"), call("https://www.nodeseek.com")])
         driver.add_cookie.assert_called_once_with({
             "name": "test", "value": "fake", "domain": ".nodeseek.com", "path": "/",
         })
-        driver.refresh.assert_called_once_with()
+        driver.refresh.assert_not_called()
 
 
 if __name__ == "__main__":

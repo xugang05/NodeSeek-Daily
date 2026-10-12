@@ -31,5 +31,5 @@ jobs:
       - name: Run regression tests
         run: python -m unittest discover -s tests -p 'test_*.py' -v
       # Uses the hosted runner's Chrome. No secrets or NodeSeek requests.
-      - name: Verify browser startup only
-        run: python -m unittest discover -s tests -p 'smoke_browser_startup.py' -v
+      - name: Verify browser and local attendance transport
+        run: python -m unittest discover -s tests -p 'smoke_*.py' -v
