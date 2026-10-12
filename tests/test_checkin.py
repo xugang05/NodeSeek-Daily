@@ -86,7 +86,8 @@ class AttendanceBrowserTests(unittest.TestCase):
             self.assertFalse(daily.click_sign_icon(driver))
         self.assertNotIn("PRIVATE_", output.getvalue())
 
-    def test_no_post_when_page_is_login_challenge_or_wrong_origin(self):
+    @patch.object(daily.time, "sleep")
+    def test_no_post_when_page_is_login_challenge_or_wrong_origin(self, sleep):
         for url, title, elements in (
             ("https://www.nodeseek.com/login", "NodeSeek", []),
             ("https://www.nodeseek.com/signIn", "NodeSeek", []),
@@ -100,6 +101,36 @@ class AttendanceBrowserTests(unittest.TestCase):
             with self.subTest(url=url, title=title):
                 self.assertFalse(daily.click_sign_icon(driver))
             driver.execute_async_script.assert_not_called()
+
+
+class ChallengeSettleTests(unittest.TestCase):
+    @patch.object(daily.time, "sleep")
+    def test_transient_challenge_gets_one_passive_settle(self, sleep):
+        driver = browser()
+        driver.title = "Just a moment..."
+        sleep.side_effect = lambda seconds: setattr(driver, "title", "NodeSeek")
+        daily.check_page(driver)
+        sleep.assert_called_once_with(8)
+        driver.get.assert_not_called()
+        driver.execute_script.assert_not_called()
+        driver.execute_async_script.assert_not_called()
+
+    @patch.object(daily.time, "sleep")
+    def test_persistent_challenge_fails_and_cannot_wait_again(self, sleep):
+        driver = browser()
+        driver.title = "Just a moment..."
+        for _ in range(2):
+            with self.assertRaisesRegex(daily.CheckinError, "challenge"):
+                daily.check_page(driver)
+        sleep.assert_called_once_with(8)
+
+    @patch.object(daily.time, "sleep")
+    def test_login_failure_does_not_wait(self, sleep):
+        driver = browser()
+        driver.current_url = "https://www.nodeseek.com/signIn"
+        with self.assertRaisesRegex(daily.CheckinError, "unauthenticated"):
+            daily.check_page(driver)
+        sleep.assert_not_called()
 
 
 class CookieAndExitTests(unittest.TestCase):

@@ -37,7 +37,7 @@ class CheckinError(RuntimeError):
     """An actionable, safe-to-log failure (never contains cookies/page content)."""
 
 
-def check_page(driver, allow_login=False):
+def inspect_page(driver, allow_login=False):
     """Do not submit requests from a redirect, login page or security challenge."""
     location = urlsplit(driver.current_url)
     if (location.scheme, location.netloc) != ("https", "www.nodeseek.com"):
@@ -49,6 +49,19 @@ def check_page(driver, allow_login=False):
         raise CheckinError("challenge: NodeSeek 要求人机验证，未执行签到")
     if not allow_login and location.path.rstrip("/") in ("/signIn", "/signin", "/login"):
         raise CheckinError("unauthenticated: 页面跳转到登录页，请更新 NS_COOKIE")
+
+
+def check_page(driver, allow_login=False):
+    """Allow one passive settle period for a transient challenge, never solve it."""
+    try:
+        inspect_page(driver, allow_login=allow_login)
+    except CheckinError as error:
+        if not str(error).startswith("challenge:") or getattr(driver, "_ns_challenge_wait_used", False) is True:
+            raise
+        driver._ns_challenge_wait_used = True
+        print("检测到验证页面，静候 8 秒后仅复查一次；不操作验证码")
+        time.sleep(8)
+        inspect_page(driver, allow_login=allow_login)
 
 
 # Use the site's same-origin attendance endpoint in the existing browser session.
