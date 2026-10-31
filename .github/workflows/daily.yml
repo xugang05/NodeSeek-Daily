@@ -5,7 +5,7 @@ on:
     branches:
       - main
   schedule:
-    - cron: '10 3 * * *'  # UTC 03:10, which is Beijing Time 11:10
+    - cron: '17 3 * * *'  # UTC 03:17, which is Beijing Time 11:17
   workflow_dispatch:
 
 jobs:
